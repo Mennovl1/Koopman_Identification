@@ -88,6 +88,30 @@ def compute_eigenpairs_Korda2020_custom(H, N_g, rho = 0.1):
     return L, G, V
 
 
+def compute_Linear_Evolution_Korda2020(H, N_g):
+    N_n, N, N_t = H.shape
+
+    print("Computing linear evolution in data to find initial states on nonrecurrent set")
+    start_time = time.perf_counter()
+
+    U, s, V = numpy.linalg.svd(H, full_matrices=False)
+
+    Sigma = numpy.empty((N_n, N_g, N_g))
+
+    for i in range(N_n):
+        Sigma[i,:,:] = numpy.diag(s[i,:N_g])
+    
+    A = numpy.linalg.pinv(U[:, :N-1, :N_g]) @ U[:, 1: N, :N_g]
+    # Perform diagonalisation
+    L, P = numpy.linalg.eig( A )
+
+    C = U[:, 0, :N_g] @ P
+
+    G = numpy.linalg.inv(P) @ Sigma @ V[:, :N_g, :N_g].transpose(0,2,1)
+    
+    elapsed = (time.perf_counter() - start_time) * 1000.0
+    print(f"Computed eigenfunction, eigenvalue pairs in {elapsed:.1f} ms")
+    return L, C, G
 
 def compute_Korda2020(X, N_g, f, rho=0.1):
     '''Compute eigenfunction based on eigenvalues L and initial function values g_0 on the nonrecurrent surface using the function library f
@@ -107,12 +131,23 @@ def compute_Korda2020(X, N_g, f, rho=0.1):
     N_t, n, N = X.shape
     # Reshape data matrix into appropriate format and compute eigenvector, eigenvalue pairs
     H = numpy.transpose(X, [1, 2, 0])
-    L, G, V = compute_eigenpairs_Korda2020_custom(H, N_g, rho=rho)
+    # L, G, V = compute_eigenpairs_Korda2020_custom(H, N_g, rho=rho)
+    L, C_obs, G = compute_Linear_Evolution_Korda2020(H, N_g)#, rho=rho)
+
+
+    V = numpy.empty((n, N, N_g), dtype=complex)
+    
+    for i in range(n):
+        V[i,:,:] = numpy.vander(L[i,...], N, increasing=True).T
+
 
     Z = numpy.empty(( f.size, N, N_t ))
 
     X_reshaped = X.reshape((n, -1))     # Flattens trajectory data into horizontally stacked data
     
+    A = numpy.diag(L.flatten())
+
+
     print("Applying function dictionary on trajectory data")
     # for i in range(N_t):
     Z = utils.ApplyFunctionDictionary(X_reshaped, f)
@@ -143,8 +178,8 @@ def compute_Korda2020(X, N_g, f, rho=0.1):
     def optimal_lift(X):
         return C @ utils.ApplyFunctionDictionary(X, f)
 
-    A = numpy.diag(L.flatten())
-    C_obs = numpy.kron(numpy.eye(n), numpy.ones((1, N_g)))
+    # A = numpy.diag(L.flatten())
+    # C_obs = numpy.kron(numpy.eye(n), numpy.ones((1, N_g)))
 
     return A, C_obs, optimal_lift
 
