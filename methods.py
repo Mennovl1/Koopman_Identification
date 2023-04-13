@@ -192,12 +192,11 @@ def testControlledMethod(method, data_system, function_dictionary, time_delays):
 
 
 
-def linear_Validate(A, B, data_system, function_dictionary, time_delays, C=None):
-
-
+def linear_Validate(A, B, data_system, function_dictionary, time_delays, C=None, maxN=1.0e9):
     validation_data = data_system.validationData()
     validation_input = data_system.validationData(Data=data_system.InputSequence)
     N_sequences, n, N_length = validation_data.shape
+    maxN = min(maxN, N_length)
 
     variance_accounted_for = numpy.empty((N_sequences, 2))
     root_mean_square = numpy.empty((N_sequences))
@@ -205,13 +204,13 @@ def linear_Validate(A, B, data_system, function_dictionary, time_delays, C=None)
 
     for i in trange(N_sequences):
         # Apply time-delays and lift coordinates
-        Y_validate = utils.MakeHankelMatrix(validation_data[i,...], time_delays)
+        Y_validate = utils.MakeHankelMatrix(validation_data[i,:,:maxN], time_delays)
 
         # Compute prediction
         x0 = function_dictionary.apply(Y_validate[:,0].reshape((n, 1)) )
-        t_out, Z_est = utils.linearpredict(x0, validation_input[i,...], A, B)
+        t_out, Z_est = utils.linearpredict(x0, validation_input[i,:,:maxN], A, B)
         if C is None:
-            Y_est = function_dictionary.recover(Z_est.T)
+            Y_est = function_dictionary.recover(Z_est)
         else:
             Y_est = C @ Z_est #
 

@@ -149,22 +149,22 @@ class Korda_Interpolator(Dict_Wrapper):
         return self.C @ X
 
 
-for_testing = thin_plate_rbf_dictionary(4, 2, 2)
+# for_testing = thin_plate_rbf_dictionary(4, 2, 2)
 
-# X = numpy.array([[0.0, 0,0,0], [0.0,0,0.0,1]])
-X = numpy.random.rand(4, 100) * 2 - 1.0
+# # X = numpy.array([[0.0, 0,0,0], [0.0,0,0.0,1]])
+# X = numpy.random.rand(4, 100) * 2 - 1.0
 
-print(for_testing.origins)
+# print(for_testing.origins)
 
-distance = for_testing.origins - X
-norm = numpy.linalg.norm(distance, axis=1)
-print(norm)
+# distance = for_testing.origins - X
+# norm = numpy.linalg.norm(distance, axis=1)
+# print(norm)
 
-res = for_testing.apply(X)
+# res = for_testing.apply(X)
 
-# diff = res - X[0:4]
+# # diff = res - X[0:4]
 
-print(for_testing.apply(X))
+# print(for_testing.apply(X))
 
 
 
