@@ -1,6 +1,7 @@
 import numpy
 import scipy.signal
 
+
 def DataToMatrix(X):
     '''Format Data matrix of multiple state or measurement sequences into a pair of data matrices X and X+, the one-time step shifted version'''
     # Extract dimensions
@@ -37,14 +38,19 @@ def partitions(n, I=1):
             yield (i,) + p
 
 
-def linearpredict(X0, U, A, B):
+def linearpredict(X0, U, A, B, dt=0.01):
     n,_ = X0.shape
     m,N = U.shape
-    print(n)
-    print(m)
-    sp_system = scipy.signal.dlti(A, B, numpy.eye(n), numpy.zeros((n,m)), dt=0.01)
 
-    return scipy.signal.dlsim(sp_system, U.T, x0=X0.flatten())
+    t_out = numpy.linspace(0, (N-1) * dt, N, endpoint=True)
+    x_out = numpy.empty((n, N), dtype=complex)
+    x_out[...,0] = X0.flatten()
+    for i in range(N-1):
+        x_out[...,i+1] = A @ x_out[...,i] + B @ U[:,i]
+
+    # sp_system = scipy.signal.dlti(A, B, numpy.eye(n), numpy.zeros((n,m)), dt=0.01)
+    # print(X0.flatten().ndim)
+    return t_out, x_out #scipy.signal.dlsim(sp_system, U.T, x0=X0.flatten())
 
 def VAF(Y, Yhat):
     '''Compute the Variance Accounted For row-wise (n x N) data length'''
@@ -65,6 +71,14 @@ def scoredata(Y, Yhat):
     c =RRMSE(Y, Yhat)
     return a, b, c 
 
+
+def report_Residuals(X, Y):
+    n, N, Nt = X.shape
+
+    for i in range(n):
+        res = 100 * numpy.linalg.norm(X[i,...] - Y[i,...],2) / numpy.linalg.norm(X[i,...],2)
+        print(f'Found relative residual in x{i} of {res:.3f} %')
+    print(numpy.max(X[i,...] - Y[i,...]))
 
 def main():
     n = 2

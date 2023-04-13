@@ -1,9 +1,15 @@
 import numpy
 from sympy.utilities.iterables import multiset_permutations
 from utils import partitions
+import scipy.interpolate
+import utils
 
+class Dict_Wrapper:
+    def __init__(self):
+        return
 
-class monomial_dictionary:
+    
+class monomial_dictionary(Dict_Wrapper):
     '''Class representing a monomial function dictionary that can be applied to data matrices for DMD methods'''
     
     def __init__(self, n, d):
@@ -67,7 +73,7 @@ class monomial_dictionary:
 
 
 
-class thin_plate_rbf_dictionary:
+class thin_plate_rbf_dictionary(Dict_Wrapper):
     '''Thin plate radial basis function dictionary. || x - x0 ||^2 log(|| x - x0 ||)'''
 
     def __init__(self, n, p, size):
@@ -99,7 +105,50 @@ class thin_plate_rbf_dictionary:
         return X[0:self.n, :]
 
 
+class Korda_Interpolator(Dict_Wrapper):
+    '''Linear interpolator constructed for usage with Korda's method for eigensurface computation'''
+
+    def __init__(self, method, X, N_g, rho = 0.05):
+        self.n, _ = X.shape
+        self.method = method
+        self.measurements = X.T   # N * N_t x n state measurement variable
+        self.N_g = N_g
+        self.rho = rho
+        self.size = N_g * self.n
+        self.C = numpy.kron(numpy.eye(self.n), numpy.ones((1, N_g)))
+
+        if method == "NN" or method == "Linear":
+            self.f = []
+        elif isinstance(method, Dict_Wrapper):
+            print("Lifting measurements")
+            self.f = numpy.empty((n * N_g, method.size), dtype=complex)
+            self.measurements = utils.ApplyFunctionDictionary(X, method)
+        else:
+            raise Exception("Undefined interpolation method")
     
+
+    def Add_Function(self, Y, i,j):
+        if self.method == "NN":
+            self.f.append(scipy.interpolate.NearestNDInterpolator(self.measurements, Y))
+        elif self.method == "Linear":
+            self.f.append(scipy.interpolate.LinearNDInterpolator(self.measurements, Y))
+        else:
+            # Solve Z.T c - G_ev.T => c.T Z = G_ev (horizontally stacked)
+            self.f[j*self.N_g + i, :] = numpy.linalg.solve( self.measurements @ self.measurements.T + self.rho * numpy.eye(self.method.size), self.measurements @ Y.T)
+
+    def apply(self, X):
+        if self.method == "NN" or self.method == "Linear":
+            res = []
+            for lerp_opt in self.f:
+                res.append(lerp_opt(X.T))
+            return numpy.asarray(res)
+        else:
+            return self.f @ self.method.apply(X)
+    
+    def recover(self, X):
+        return self.C @ X
+
+
 for_testing = thin_plate_rbf_dictionary(4, 2, 2)
 
 # X = numpy.array([[0.0, 0,0,0], [0.0,0,0.0,1]])

@@ -15,5 +15,6 @@ def compareTrajectories(t, *args, **kwargs):
         plt.legend(kwargs["Names"])
         plt.xlabel("t (s)")
         plt.ylabel('x' + str(i))
+        plt.ylim([-1,1])
         plt.show(block=False)
     plt.show()

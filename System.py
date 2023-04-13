@@ -191,9 +191,10 @@ def TuExampleSystem(time, state, control, mu=0.5, f_lambda=0.9):
 def LinearSystem(time, state, control, A=None):
     '''Linear system. Optional arguments: matrix A, else 3x3 random'''
     if A is None:
-        A = numpy.random.rand(3,3)
+        A = numpy.array([[1, 2, 3], [2, 4, 5], [1, 8, 1]])
         Astable = - A @ A.transpose()
-        B = numpy.random.rand(3,1)
+        # print(numpy.linalg.eig(Astable))
+        B = numpy.zeros((3,1))
 
     return Astable @ state + B @ control
 

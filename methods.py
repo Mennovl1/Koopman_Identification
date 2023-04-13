@@ -4,8 +4,13 @@ import utils
 import Dictionaries
 import plot_data
 import scipy.signal
+import scipy.sparse
 import matplotlib.pyplot as plt
 import time
+import scipy.interpolate
+# from progress.bar import Bar
+from tqdm.notebook import trange, tqdm
+
 
 def compute_DMD_solution(X_shift, X):
     '''Perform the core Dynamic mode Decomposition step on data matrices X shift and X'''
@@ -51,138 +56,119 @@ def compute_Korda2018(X_shift, X, U, f):
     
     return A, B, C
 
+def compute_Linear_Evolution_Korda2020(H, N_g, s = 10):
+    '''Compute linear evolution estimate for eigenvalues and continuous function estimates on nonrecurrent set. 
+    Comes down to decomposing H into a product of a Vandermonde matrix L, H = L G
 
-def compute_eigenpairs_Korda2020_custom(H, N_g, rho = 0.1):
-    '''Compute eigenfunction-eigenvalue pairs from measurement data H in shape N, N_t, N_n.
+    Args:
+        H:          n x N x N_t array, n measurement variables measured for N_t sequences for length N. 
+        N_g:        Number of eigenvalues in Vandermonde matrix per measurement variable
     
-    Input: 
-        H: N_n x N x N_t        Measurement data of N_t trajectories of length N with N_n measurements
-        N_g:                    Number of eigenfunction/eigenvector pairs per measurement variable.
-        rho:                    Regularisation parameter rho, default = 0.1
-
     Returns:
-        L: N_n x N_g            Eigenvalues associated to the measurement data
-        G: N_n x N_g x N_t      Initial conditions associated to the eigenvalues and data
-        V: N_n x N   x N_g      Vandermonde matrix that is later used in Korda optimisation    
+        L:          n x N x N_g array, Vandermonde matrix in decomposition
+        G:          n x N_g x N_t array, Function estimates g_i(x(0)) on nonrecurrent set
+        eigVals:    N_g array, Largest N_g eigenvalues associated to the system evolution
     '''
-    N_n, N, N_t = H.shape
-
-    print("Computing linear evolution in data to find eigenvalues and eigenfunctions on nonrecurrent set")
-    start_time = time.perf_counter()
-    # Compute linear evolution matrices from singular value decomposition
-    U, _, _ = numpy.linalg.svd(H, full_matrices=False)
-
-    # Compute eigenvalues associated to the evolution. s is shape N_n x N_g
-    L, _ = numpy.linalg.eig( numpy.linalg.pinv(U[:, :N-1, :N_g]) @ U[:, 1: N, :N_g])
-
-    # Compute vanderMonde matrix to find linear evolution
-    V = numpy.empty((N_n, N, N_g), dtype=complex)
-    for i in range(N_n):
-        V[i,:,:] = numpy.vander(L[i,:], N, increasing=True).T
-    
-    # Compute initial conditions as regularised least-square solution
-    G = numpy.linalg.solve( V.transpose((0,2,1)) @ V + rho * numpy.eye(N_g) , V.transpose((0,2,1)) @ H )
-
-    elapsed = (time.perf_counter() - start_time) * 1000.0
-    print(f"Computed eigenfunction, eigenvalue pairs in {elapsed:.1f} ms")
-    return L, G, V
-
-
-def compute_Linear_Evolution_Korda2020(H, N_g):
-    N_n, N, N_t = H.shape
 
     print("Computing linear evolution in data to find initial states on nonrecurrent set")
+    N_n, N, N_t = H.shape
     start_time = time.perf_counter()
 
-    U, s, V = numpy.linalg.svd(H, full_matrices=False)
-
-    Sigma = numpy.empty((N_n, N_g, N_g))
-
-    for i in range(N_n):
-        Sigma[i,:,:] = numpy.diag(s[i,:N_g])
+    X = H.transpose((2,0,1))
     
-    A = numpy.linalg.pinv(U[:, :N-1, :N_g]) @ U[:, 1: N, :N_g]
-    # Perform diagonalisation
-    L, P = numpy.linalg.eig( A )
+    # Reformat into time-delay coordinates
+    Y = numpy.empty((s+1, N-s, N_t))
+    Data = numpy.empty((N_n, s+1, (N-s)*N_t))
+    print(f"Formatting time-delay coordinates with delay s = {s}")
+    for k in trange(N_n):
+        for i in trange(N_t):
+            Y[:,:,i] = utils.MakeHankelMatrix(X[i,k,:].reshape((1,N)), s)
+        Data[k,:,:] = Y.reshape((s+1, -1), order='F')       # s+1 x (N-s)N_t
 
-    C = U[:, 0, :N_g] @ P
+    u, _, _ = numpy.linalg.svd(Data, full_matrices=False, compute_uv=True)
+    
+    # Compute through svd subspace and associated shift-eigenvalues
+    Phi = numpy.linalg.pinv(u[:,:-1, :N_g]) @ u[:,1:,:N_g]
+    E = numpy.linalg.eigvals( Phi )
+    
+    eigVals = E #numpy.empty((N_n, N_g), dtype=complex)
+    L = numpy.empty((N_n, N, N_g), dtype = complex)
+    G = numpy.empty((N_n, N_g, N_t), dtype=complex)
 
-    G = numpy.linalg.inv(P) @ Sigma @ V[:, :N_g, :N_g].transpose(0,2,1)
+    # Construct associated Vandermonde matrix from eigenvalues
+    for i in range(N_n):
+        L[i,...]     = numpy.vander(eigVals[i,:], N, increasing=True).T 
+    
+    # Compute initial function surface
+    G = numpy.linalg.pinv(L) @ H
+
+    # Report residuals of least square problem
+    utils.report_Residuals(H, L @ G)
     
     elapsed = (time.perf_counter() - start_time) * 1000.0
     print(f"Computed eigenfunction, eigenvalue pairs in {elapsed:.1f} ms")
-    return L, C, G
+    return L, G, eigVals
 
-def compute_Korda2020(X, N_g, f, rho=0.1):
+def compute_Korda2020(X, N_g, rho=0.05, s=10, method="NN"):
     '''Compute eigenfunction based on eigenvalues L and initial function values g_0 on the nonrecurrent surface using the function library f
     
     
-    Input:
+    Args:
         X: N_t x n x N          Data input matrix from autonomous system evolution
         N_g:                    Number of eigenvalue/eigenvector pairs used per measurement variable (so total n x N_g initial eigenfunctions)
         f:                      Function dictionary used to estimate linear evolution surface
 
 
-    Output: 
+    Returns: 
         A:                      Linear evolution matrix, diag(L)
         C:                      Observation matrix to recover the original output
         optimal_lift:           Lifting function input
     '''
     N_t, n, N = X.shape
-    # Reshape data matrix into appropriate format and compute eigenvector, eigenvalue pairs
+
+    # Reshape data matrix into format n x N x N_t, compute decomposition
     H = numpy.transpose(X, [1, 2, 0])
-    # L, G, V = compute_eigenpairs_Korda2020_custom(H, N_g, rho=rho)
-    L, C_obs, G = compute_Linear_Evolution_Korda2020(H, N_g)#, rho=rho)
-
-
-    V = numpy.empty((n, N, N_g), dtype=complex)
-    
-    for i in range(n):
-        V[i,:,:] = numpy.vander(L[i,...], N, increasing=True).T
-
-
-    Z = numpy.empty(( f.size, N, N_t ))
-
-    X_reshaped = X.reshape((n, -1))     # Flattens trajectory data into horizontally stacked data
-    
-    A = numpy.diag(L.flatten())
-
-
-    print("Applying function dictionary on trajectory data")
-    # for i in range(N_t):
-    Z = utils.ApplyFunctionDictionary(X_reshaped, f)
-
-    # Z_reshaped = Z.reshape((f.size, -1))
-    # print(Z_reshaped.shape)
-
-    # V is of n x N x N_g
+    L, G, eig = compute_Linear_Evolution_Korda2020(H, N_g, s=s)
+    # L is of n x N x N_g
     # G is of n x N_g x N_t
+    
+    # Flatten trajectory data into horizontally stacked data, i.e. n x N * N_t
+    X_reshaped = H.reshape((n, -1), order='F')
+
     # Solve problem per eigenfunction
     print("Starting computation of linear evolution surface from data")
     start_time = time.perf_counter()
 
-    C = numpy.empty((n * N_g, f.size), dtype=complex)    
-    for j in range(n):
-        for i in range(N_g):
+    interpolator = Dictionaries.Korda_Interpolator(method, X_reshaped, N_g, rho=rho)
 
-            G_ev = numpy.outer(V[j, :, i], G[j, i, :]).T.flatten()      # N x N_t -> vertical time evolution, horizontal trajectories, stack trajectories horizontally
-
-            # Compute estimated eigenfunction, store such that row corresponds to a eigenvector
-            C[j * N_g + i, :] = numpy.linalg.solve( Z @ Z.T + rho * numpy.eye(f.size), Z @ G_ev.T )
-
-
+    Compute_Eigensurface(N_g, n, L, G, interpolator)
 
     elapsed = (time.perf_counter() - start_time) * 1000.0
     print(f"Computed eigenfunction surface in {elapsed:.1f} ms")
 
-    def optimal_lift(X):
-        return C @ utils.ApplyFunctionDictionary(X, f)
+    # Construct eigenfunction surface
+    A = numpy.diag(eig.flatten())
+ 
+    return A, interpolator
 
-    # A = numpy.diag(L.flatten())
-    # C_obs = numpy.kron(numpy.eye(n), numpy.ones((1, N_g)))
 
-    return A, C_obs, optimal_lift
-
+def Compute_Eigensurface(N_g, n, L, G, interpolator):
+    '''Compute observable with linear evolution from linear evolution data
+    
+    Args:
+        N_g:            Number of eigenfunctions associated to a measurement n
+        n:              Measurement dimension
+        L:              Vandermonde matrix defining the linear evolution of the surface
+        G:              Initial states on nonrecurrent set associated to eigenvalues in Vandermonde matrix
+    '''
+    for j in trange(n):
+        for i in trange(N_g):
+            # Outer product between 1, l^1, l^2, l^3, ... and g1(x1) g1(x2) g1(x3) ...
+            # Without transpose and without flatten, G_ev is N x N_t
+            G_ev = numpy.outer(L[j, :, i], G[j, i, :]).T.flatten()      # N x N_t -> vertical time evolution, horizontal trajectories, stack trajectories horizontally
+            # G_ev flattened is N*N_t
+            interpolator.Add_Function(G_ev, i, j)
+    return
 
 def testControlledMethod(method, data_system, function_dictionary, time_delays):
     '''Perform control-compatible DMD method with data in data_system and given function_dictionary'''
@@ -206,7 +192,7 @@ def testControlledMethod(method, data_system, function_dictionary, time_delays):
 
 
 
-def linear_Validate(A, B, C, data_system, function_dictionary, time_delays):
+def linear_Validate(A, B, data_system, function_dictionary, time_delays, C=None):
 
 
     validation_data = data_system.validationData()
@@ -217,15 +203,17 @@ def linear_Validate(A, B, C, data_system, function_dictionary, time_delays):
     root_mean_square = numpy.empty((N_sequences))
     rroot_mean_square = numpy.empty((N_sequences))
 
-    for i in range(N_sequences):
+    for i in trange(N_sequences):
         # Apply time-delays and lift coordinates
         Y_validate = utils.MakeHankelMatrix(validation_data[i,...], time_delays)
 
         # Compute prediction
         x0 = function_dictionary.apply(Y_validate[:,0].reshape((n, 1)) )
-        t_out, Z_est, X_est = utils.linearpredict(x0, validation_input[i,...], A, B)
-        
-        Y_est = C @ Z_est.T #function_dictionary.recover(Z_est.T)
+        t_out, Z_est = utils.linearpredict(x0, validation_input[i,...], A, B)
+        if C is None:
+            Y_est = function_dictionary.recover(Z_est.T)
+        else:
+            Y_est = C @ Z_est #
 
         variance_accounted_for[i], root_mean_square[i], rroot_mean_square[i] = utils.scoredata(Y_validate, Y_est)
 
@@ -233,23 +221,22 @@ def linear_Validate(A, B, C, data_system, function_dictionary, time_delays):
     return variance_accounted_for, root_mean_square, rroot_mean_square
 
 
-def linear_compare(A, B, C, system, function_dictionary, time_delays, x0, u):
+def linear_compare(A, B, system, function_dictionary, time_delays, x0, u, C=None):
     m,N = u.shape
     n, = x0.shape
 
     # Compute linear prediction
-    # z0 = function_dictionary.apply(x0.reshape(n,1))
-    z0 = function_dictionary(x0.reshape(n,1))
+    print("Lifting dynamics")
+    z0 = function_dictionary.apply(x0.reshape(n,1))
 
-    t_out, z_est, x_est = utils.linearpredict(z0, u, A, B)
-    # y_est = function_dictionary.recover(z_est.T)
-    y_est = 0
-    y_est2 = C @ z_est.T
-    
-    # Compute normal evolution
-    t_comp, y_comp = system.evolve(x0, u)
+    t_out, z_est = utils.linearpredict(z0, u, A, B)
+    y_est = function_dictionary.recover(z_est)
 
-    return t_out, y_est, y_comp, y_est2
+    t_comp, y_comp = system.evolve(x0.flatten(), u)
+    if C is None:
+        return t_out, y_est, y_comp
+    else:
+        return t_out, y_est, y_comp, C @ z_est
 
 
 
